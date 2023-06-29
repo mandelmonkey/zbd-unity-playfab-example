@@ -1,4 +1,7 @@
 var MAX_VALUE = 10;
+var MAX_SCORE_VALUE = 10000000;
+var rewardsQueue = {};
+var rewardAmounts = [10000, 9000, 8000, 7000, 6000];
 handlers.getUserData = function(args, context) {
     var titleData = server.GetTitleInternalData({});
     var headers = {
@@ -127,6 +130,17 @@ handlers.addPoint = function(args, context) {
 
     var addResult = addPoints(1);
 
+
+    var request = {
+        PlayFabId: currentPlayerId,
+        Statistics: [{
+            StatisticName: "PlayerScore",
+            Value: 1
+        }]
+    };
+
+    var result = server.UpdatePlayerStatistics(request);
+
     return {
         type: "addPoint",
         success: true,
@@ -232,7 +246,7 @@ function updateUserSats(sats) {
     if (userData.Data.satsSent) {
         userSatsSent = Number(userData.Data.satsSent.Value);
     }
-    userSatsSent +=  Number(sats);
+    userSatsSent += Number(sats);
 
     server.UpdateUserInternalData({
         PlayFabId: currentPlayerId, // automatically provided in CloudScript
@@ -248,12 +262,11 @@ handlers.withdraw = function(args, context) {
 
         var userData = server.GetUserInternalData({
             PlayFabId: currentPlayerId,
-            Keys: ["zbdUserId","isZBDVerified"],
+            Keys: ["zbdUserId", "isZBDVerified"],
             IfChangedFromDataVersion: 0
         });
-        
-      
-        if (!userData.Data.isZBDVerified.Boolean) {
+
+        if (userData.Data.isZBDVerified.Value !== "true") {
             return {
                 type: "withdraw",
                 success: false,
@@ -287,7 +300,7 @@ handlers.withdraw = function(args, context) {
         }
 
 
-     resetPoints(points);
+        resetPoints(points);
 
 
         var milliSatsToSend = points * 1000;
@@ -298,7 +311,7 @@ handlers.withdraw = function(args, context) {
 
         if (!responseObject.success) {
 
-          addPoints(points);
+            addPoints(points);
 
             return {
                 type: "withdraw",
@@ -307,7 +320,7 @@ handlers.withdraw = function(args, context) {
             };
         }
 
-       
+
         updateUserSats(points);
 
         return {
@@ -324,4 +337,84 @@ handlers.withdraw = function(args, context) {
             data: e + ""
         };
     }
+
+
+
+};
+
+function emptyRewardsQueue() {
+
+    const queueKeys = Object.keys(rewardsQueue);
+
+    if (queueKeys.length == 0) {
+        log.info("payments complete");
+        return;
+    }
+
+    const currentPlayerKey = queueKeys[queueKeys.length - 1];
+    const currentPlayerInfo = rewardsQueue[currentPlayerKey];
+    const {
+        Position
+    } = currentPlayerInfo;
+
+    var userData = server.GetUserInternalData({
+        PlayFabId: currentPlayerKey,
+        Keys: ["zbdUserId"],
+        IfChangedFromDataVersion: 0
+    });
+
+    delete rewardsQueue[currentPlayerKey];
+
+    const zbdId = userData.Data.zbdUserId.Value;
+
+    const gamertag = getGamerTagForZBDUserId(zbdId);
+
+    const milliSatsToSend = rewardAmounts[Position];
+
+
+    var responseObject = sendToGamerTag(milliSatsToSend, gamertag);
+
+    if (!responseObject.success) {
+
+        log.error("couldnt send to gamertag");
+    }
+
+    log.info("sent " + milliSatsToSend + " to " + gamertag);
+
+    emptyRewardsQueue();
+
+}
+handlers.awardPrize = function(args, context) {
+
+    rewardsQueue = {};
+    var leaderboardRequest = {
+        StatisticName: "PlayerScore", // replace "score" with the name of your statistic
+        StartPosition: 0,
+        MaxResultsCount: 100 // adjust this number based on your needs
+    };
+
+    var leaderboardResult = server.GetLeaderboard(leaderboardRequest);
+
+    log.info(leaderboardResult);
+    for (var i = 0; i < leaderboardResult.Leaderboard.length; i++) {
+        const aLeaderBoardResult = leaderboardResult.Leaderboard[i];
+        const {
+            PlayFabId,
+            StatValue,
+            Position
+        } = aLeaderBoardResult;
+
+        if (StatValue < MAX_SCORE_VALUE) {
+            rewardsQueue[PlayFabId] = {
+                Position,
+                StatValue
+            };
+        }
+
+
+    }
+
+    emptyRewardsQueue();
+
+    log.info(rewardsQueue);
 };
